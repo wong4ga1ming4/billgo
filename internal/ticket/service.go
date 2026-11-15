@@ -129,6 +129,23 @@ func (s *Service) List() []State {
 	return out
 }
 
+// Receipts 返回一张工单收到的全部回执，按跳号排序。
+func (s *Service) Receipts(tid string) ([]Receipt, error) {
+	prefix := tid + "|"
+	var out []Receipt
+	err := s.st.ForEach(ReceiptsBucket, func(k, v []byte) error {
+		if !strings.HasPrefix(string(k), prefix) {
+			return nil
+		}
+		var r Receipt
+		if json.Unmarshal(v, &r) == nil {
+			out = append(out, r)
+		}
+		return nil
+	})
+	return out, err
+}
+
 // Events 按序返回一张工单的事件。
 func (s *Service) Events(tid string) ([]Event, error) {
 	prefix := tid + "|"

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -36,19 +37,29 @@ type Wake struct {
 	HostFP    string `json:"host_fp"`   // 仅 ssh：SSH 主机指纹，连的时候固定
 }
 
+// UIConfig 内置页面配置。
+//
+// Listen 为空表示关闭；非 loopback 地址会在启动时被拒绝。
+// Root 是 Agent 可写的静态目录，默认 <data_dir>/www。
+type UIConfig struct {
+	Listen string `json:"listen"`
+	Root   string `json:"root,omitempty"`
+}
+
 // Config 一个节点的全部运行配置。
 type Config struct {
-	Name      string   `json:"name"`       // 别名，只作展示，不唯一
-	Desc      string   `json:"desc"`       // 自由描述，发起者按它选节点
-	Kind      string   `json:"kind"`       // resident | wakeable
-	Network   string   `json:"network"`    // 域标识，默认 default
-	Listen    string   `json:"listen"`     // HTTP 监听地址
-	Endpoint  string   `json:"endpoint"`   // 对外地址，如 https://10.0.0.2:8787
-	DataDir   string   `json:"data_dir"`   // 数据目录（bbolt + blobs + 私钥）
-	Bootstrap []string `json:"bootstrap"`  // 启动时拉名录的已知节点（https://h:p#peer_id）
-	AllowFrom []string `json:"allow_from"` // 允许派单给我的 peer_id；空 = 全拒
-	Wake      *Wake    `json:"wake,omitempty"`
-	AgentCmd  []string `json:"agent_cmd"` // 接活时执行的命令，空 = 只接受不执行
+	Name      string    `json:"name"`       // 别名，只作展示，不唯一
+	Desc      string    `json:"desc"`       // 自由描述，发起者按它选节点
+	Kind      string    `json:"kind"`       // resident | wakeable
+	Network   string    `json:"network"`    // 域标识，默认 default
+	Listen    string    `json:"listen"`     // HTTP 监听地址
+	Endpoint  string    `json:"endpoint"`   // 对外地址，如 https://10.0.0.2:8787
+	DataDir   string    `json:"data_dir"`   // 数据目录（bbolt + blobs + 私钥）
+	Bootstrap []string  `json:"bootstrap"`  // 启动时拉名录的已知节点（https://h:p#peer_id）
+	AllowFrom []string  `json:"allow_from"` // 允许派单给我的 peer_id；空 = 全拒
+	Wake      *Wake     `json:"wake,omitempty"`
+	UI        *UIConfig `json:"ui,omitempty"`
+	AgentCmd  []string  `json:"agent_cmd"` // 接活时执行的命令，空 = 只接受不执行
 
 	AcceptTimeoutMin  int `json:"accept_timeout_min"`  // 派单后多久未受理算超时
 	DeliverTimeoutMin int `json:"deliver_timeout_min"` // 受理后多久未交付算超时
@@ -64,6 +75,7 @@ func Default() *Config {
 		Network:           "default",
 		Listen:            "0.0.0.0:8787",
 		DataDir:           "data",
+		UI:                &UIConfig{Listen: "127.0.0.1:7878"},
 		AcceptTimeoutMin:  30,
 		DeliverTimeoutMin: 120,
 		JobTimeoutMin:     60,
@@ -76,6 +88,7 @@ func Load(path string) (*Config, error) {
 	c := Default()
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
+		c.fillDefaults()
 		return c, nil
 	}
 	if err != nil {
@@ -121,6 +134,12 @@ func (c *Config) fillDefaults() {
 	}
 	if c.AntiEntropySec <= 0 {
 		c.AntiEntropySec = d.AntiEntropySec
+	}
+	if c.UI == nil {
+		c.UI = &UIConfig{Listen: "127.0.0.1:7878"}
+	}
+	if c.UI.Root == "" {
+		c.UI.Root = filepath.Join(c.DataDir, "www")
 	}
 }
 
@@ -214,6 +233,20 @@ func (c *Config) Validate() error {
 	}
 	if _, err := c.ParsedBootstrap(); err != nil {
 		return err
+	}
+	if c.UI != nil && c.UI.Listen != "" {
+		host, _, err := net.SplitHostPort(c.UI.Listen)
+		if err != nil {
+			return fmt.Errorf("ui.listen %q: %w", c.UI.Listen, err)
+		}
+		switch host {
+		case "127.0.0.1", "localhost", "::1":
+		default:
+			return fmt.Errorf("ui.listen 只允许 loopback（127.0.0.1 / localhost / ::1），得到 %q", c.UI.Listen)
+		}
+		if c.UI.Root == "" {
+			return errors.New("ui.root 不能为空")
+		}
 	}
 	return nil
 }

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>发起工单 · billgo</title>
+  <link rel="stylesheet" href="/_ui/style.css">
+</head>
+<body data-page="new">
+  <header class="top">
+    <h1>发起工单</h1>
+    <a href="/">返回</a>
+  </header>
+  <main>
+    <div id="error" class="error" hidden></div>
+
+    <section>
+      <h2>目标节点</h2>
+      <p class="muted">点击添加，顺序即流转顺序。</p>
+      <div id="peer-list" class="chips"></div>
+      <h3>已选择</h3>
+      <ol id="selected" class="selected"></ol>
+    </section>
+
+    <section>
+      <h2>表单</h2>
+      <textarea id="form" rows="10" spellcheck="false">{"task": "写一份报告"}</textarea>
+    </section>
+
+    <section>
+      <button id="submit" class="button primary">发起</button>
+    </section>
+  </main>
+  <script src="/_ui/app.js"></script>
+</body>
+</html>

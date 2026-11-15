@@ -21,11 +21,18 @@ import (
 	"billgo/internal/ticket"
 	"billgo/internal/transport"
 	"billgo/internal/wake"
+	"billgo/internal/webui"
 )
+
+// Options 装配参数。
+type Options struct {
+	Version string
+}
 
 // Node 一个运行中的 Agent 节点。
 type Node struct {
 	cfg     *config.Config
+	version string
 	id      *identity.Identity
 	st      *store.Store
 	client  *transport.Client
@@ -33,11 +40,20 @@ type Node struct {
 	peers   *peers.Service
 	out     *outbox.Queue
 	tickets *ticket.Service
+	ui      *webui.Server
 	ready   atomic.Bool
 }
 
 // New 装配节点，但不启动监听。
 func New(cfg *config.Config) (*Node, error) {
+	return NewWithOptions(cfg, Options{})
+}
+
+// NewWithOptions 装配节点，version 用于页面展示。
+func NewWithOptions(cfg *config.Config, opts Options) (*Node, error) {
+	if opts.Version == "" {
+		opts.Version = "dev"
+	}
 	id, err := identity.LoadOrCreate(filepath.Join(cfg.DataDir, "identity.key"))
 	if err != nil {
 		return nil, err
@@ -51,7 +67,7 @@ func New(cfg *config.Config) (*Node, error) {
 		return nil, fmt.Errorf("建 blobs 目录: %w", err)
 	}
 
-	n := &Node{cfg: cfg, id: id, st: st}
+	n := &Node{cfg: cfg, version: opts.Version, id: id, st: st}
 	n.client = transport.NewClient(id.PeerID)
 
 	srv, err := transport.NewServer(id.PeerID, id.Private, cfg.Listen, n.isReady, n.handle, st.BlobDir())
@@ -78,6 +94,30 @@ func New(cfg *config.Config) (*Node, error) {
 		return wake.Do(ctx, w)
 	}, id.Private)
 	n.tickets = ticket.New(id, st, n.peers, n.client, n.out, &c)
+
+	if c.UI != nil && c.UI.Listen != "" {
+		info := webui.Info{
+			PeerID:    id.PeerID,
+			Name:      c.Name,
+			Kind:      c.Kind,
+			Network:   c.Network,
+			Endpoint:  c.Endpoint,
+			Version:   opts.Version,
+			Listen:    c.UI.Listen,
+			Bootstrap: c.Bootstrap,
+			AllowFrom: c.AllowFrom,
+		}
+		if c.Wake != nil {
+			info.WakeMode = c.Wake.Mode
+		}
+		ui, err := webui.New(info, n.peers, n.tickets, n.out, c.UI.Root, st.BlobDir(), c.UI.Listen)
+		if err != nil {
+			srv.Close(context.Background())
+			st.Close()
+			return nil, err
+		}
+		n.ui = ui
+	}
 	return n, nil
 }
 
@@ -86,6 +126,11 @@ func (n *Node) Run(ctx context.Context) error {
 	n.srv.Start()
 	n.ready.Store(true)
 	defer n.ready.Store(false)
+
+	if n.ui != nil {
+		n.ui.Start()
+		slog.Info("页面已启动", "url", "http://"+n.ui.Addr()+"/")
+	}
 
 	slog.Info("节点已启动",
 		"peer_id", n.id.PeerID,
@@ -121,6 +166,9 @@ func (n *Node) Run(ctx context.Context) error {
 
 	sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if n.ui != nil {
+		_ = n.ui.Close(sctx)
+	}
 	_ = n.srv.Close(sctx)
 	return n.st.Close()
 }
@@ -129,6 +177,17 @@ func (n *Node) isReady() bool { return n.ready.Load() }
 
 // PeerID 本节点标识。
 func (n *Node) PeerID() string { return n.id.PeerID }
+
+// Version 构建版本。
+func (n *Node) Version() string { return n.version }
+
+// UIAddr 页面监听地址；未启用时为空。
+func (n *Node) UIAddr() string {
+	if n.ui == nil {
+		return ""
+	}
+	return n.ui.Addr()
+}
 
 // Endpoint 别人连本节点用的地址。
 func (n *Node) Endpoint() string { return n.cfg.Endpoint }

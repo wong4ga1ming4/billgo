@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工单详情 · billgo</title>
+  <link rel="stylesheet" href="/_ui/style.css">
+</head>
+<body data-page="ticket">
+  <header class="top">
+    <h1>工单详情</h1>
+    <a href="/">返回</a>
+  </header>
+  <main>
+    <div id="error" class="error" hidden></div>
+
+    <section>
+      <h2 id="ticket-title">加载中…</h2>
+      <div id="state" class="muted"></div>
+    </section>
+
+    <section>
+      <h2>流转</h2>
+      <table class="grid">
+        <thead><tr><th>跳</th><th>目标</th><th>状态</th><th>说明</th></tr></thead>
+        <tbody id="hops"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>表单</h2>
+      <pre id="form" class="code"></pre>
+    </section>
+
+    <section>
+      <h2>交付物</h2>
+      <ul id="artifacts" class="links"></ul>
+    </section>
+
+    <section>
+      <h2>事件</h2>
+      <ol id="events" class="events"></ol>
+    </section>
+  </main>
+  <script src="/_ui/app.js"></script>
+</body>
+</html>

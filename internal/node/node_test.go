@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,8 @@ func baseCfg(t *testing.T, name string) *config.Config {
 	c.AcceptTimeoutMin = 5
 	c.DeliverTimeoutMin = 5
 	c.JobTimeoutMin = 2
+	// 测试里多个节点同机运行，默认的 127.0.0.1:7878 会冲突。
+	c.UI = &config.UIConfig{Listen: "", Root: c.UI.Root}
 	return c
 }
 
@@ -337,6 +340,41 @@ func TestWakeableNotTombstonedOnStop(t *testing.T) {
 		}
 	}
 	t.Fatal("apple 名录里应该还留着 banana 的记录")
+}
+
+func TestUIServed(t *testing.T) {
+	cfg := baseCfg(t, "apple")
+	cfg.UI = &config.UIConfig{Listen: "127.0.0.1:0", Root: filepath.Join(cfg.DataDir, "www")}
+	r := start(t, cfg)
+
+	addr := r.n.UIAddr()
+	if addr == "" {
+		t.Fatal("页面没有启动")
+	}
+	resp, err := http.Get("http://" + addr + "/api/node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("页面接口 %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out["peer_id"] != r.n.PeerID() {
+		t.Fatalf("peer_id 不对: %+v", out)
+	}
+
+	page, err := http.Get("http://" + addr + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer page.Body.Close()
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("主页 %d", page.StatusCode)
+	}
 }
 
 func TestResumeJobAfterRestart(t *testing.T) {

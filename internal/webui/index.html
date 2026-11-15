@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>billgo</title>
+  <link rel="stylesheet" href="/_ui/style.css">
+</head>
+<body data-page="index">
+  <header class="top">
+    <h1>billgo</h1>
+    <div id="node-line" class="muted">加载中…</div>
+  </header>
+  <main>
+    <div id="error" class="error" hidden></div>
+
+    <section>
+      <h2>状态</h2>
+      <div id="summary" class="cards"></div>
+    </section>
+
+    <section>
+      <h2>待处理</h2>
+      <ul id="attention" class="list"></ul>
+    </section>
+
+    <section>
+      <h2>配置</h2>
+      <dl id="config" class="config"></dl>
+    </section>
+
+    <section>
+      <h2>名录</h2>
+      <table class="grid">
+        <thead><tr><th>节点</th><th>类型</th><th>地址</th><th>版本</th><th>描述</th></tr></thead>
+        <tbody id="peers"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>我的工单 <a class="button" href="/new.html">发起工单</a></h2>
+      <table class="grid">
+        <thead><tr><th>工单</th><th>状态</th><th>当前跳</th><th>更新时间</th></tr></thead>
+        <tbody id="tickets"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Agent 发布的页面</h2>
+      <ul id="pages" class="links"></ul>
+    </section>
+  </main>
+  <footer class="muted">billgo · 本机页面 · 每 2 秒刷新</footer>
+  <script src="/_ui/app.js"></script>
+</body>
+</html>

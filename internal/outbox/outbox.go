@@ -43,12 +43,13 @@ type Waker func(ctx context.Context, w *config.Wake) error
 
 // Item 一条待发信封。
 type Item struct {
-	ID       uint64          `json:"id"`
-	PeerID   string          `json:"peer_id"`
-	Envelope json.RawMessage `json:"envelope"`
-	Attempts int             `json:"attempts"`
-	NextAt   int64           `json:"next_at"` // Unix 毫秒
-	LastErr  string          `json:"last_err,omitempty"`
+	ID        uint64          `json:"id"`
+	PeerID    string          `json:"peer_id"`
+	Envelope  json.RawMessage `json:"envelope"`
+	Attempts  int             `json:"attempts"`
+	CreatedAt int64           `json:"created_at"` // Unix 毫秒
+	NextAt    int64           `json:"next_at"`    // Unix 毫秒
+	LastErr   string          `json:"last_err,omitempty"`
 }
 
 // Queue 出站队列。
@@ -85,7 +86,8 @@ func (q *Queue) Enqueue(peerID string, e *envelope.Envelope) error {
 	if err != nil {
 		return err
 	}
-	it := Item{ID: seq, PeerID: peerID, Envelope: raw, NextAt: q.now().UnixMilli()}
+	now := q.now().UnixMilli()
+	it := Item{ID: seq, PeerID: peerID, Envelope: raw, CreatedAt: now, NextAt: now}
 	buf, err := json.Marshal(it)
 	if err != nil {
 		return err

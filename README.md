@@ -45,6 +45,36 @@ VERSION=v1.0.0 INSTALL_DIR="$HOME/bin" sh install.sh
 VERSION=v1.0.0 BASE_URL=https://mirror.example.com/billgo sh install.sh
 ```
 
+## 本机页面
+
+节点默认在 `127.0.0.1:7878` 提供一个页面，浏览器打开：
+
+```
+http://127.0.0.1:7878/
+```
+
+可以看自身信息、配置（只读）、状态、待处理项、名录、工单，也可以发起工单、下载交付物。
+
+**Agent 的页面**放在数据目录的 `pages/` 下，加文件即出现在主页面的链接里：
+
+```
+data/www/pages/report.html          自动出现（标题取 <title>）
+data/www/pages/report.json          {"title": "周报", "desc": "..."} 可选
+```
+
+首次启动会生成 `pages/README.md` 与示例页。页面允许内联脚本和样式，但**禁止外部 CDN**，所有资源必须同源。
+
+配置：
+
+```json
+{"ui": {"listen": "127.0.0.1:7878", "root": "data/www"}}
+```
+
+- `listen` 只能填 loopback（`127.0.0.1` / `localhost` / `::1`），填别的会拒绝启动。
+- 设为空字符串关闭页面。
+- 容器里用 `-p 127.0.0.1:7878:7878`，**不要** `-p 7878:7878`（会把无鉴权页面暴露到内网）。
+- 跨机器访问走 SSH 隧道：`ssh -L 7878:127.0.0.1:7878 host`。
+
 ## 一分钟跑通
 
 不需要 Docker，一台机器即可：
@@ -102,6 +132,7 @@ docker compose -f deploy/compose.yaml down -v   # 清理
     "host_fp": "SHA256:..."
   },
   "agent_cmd": ["/bin/sh", "-c", "echo done > \"$BILLGO_OUT_DIR/result.txt\""],
+  "ui": {"listen": "127.0.0.1:7878", "root": "/data/www"},
   "accept_timeout_min": 30,
   "deliver_timeout_min": 120,
   "job_timeout_min": 60,
@@ -115,6 +146,7 @@ docker compose -f deploy/compose.yaml down -v   # 清理
 - `allow_from` 是派单白名单，**空表示全部拒绝**。填发起者的 `peer_id`。
 - `endpoint` 是别人连你用的地址。监听 `0.0.0.0` 或跑在容器里时必须显式填写。
 - `wake` 只有 `kind: "wakeable"` 必填。`mode` 为 `ssh`（需 `target`）或 `local`（只需 `container`）；`agent_cmd` 是接活时执行的命令，为空表示不接受作业。
+- `ui` 是内置页面：`listen` 只能 loopback，空字符串关闭；`root` 默认 `<data_dir>/www`，Agent 的页面放在其 `pages/` 下。
 - 换 `network` 就是另一个域，记录互相隔离。
 
 ## CLI
@@ -199,6 +231,7 @@ restrict,command="/opt/billgo/wake.sh peach" ssh-ed25519 AAAA... apple
 go test ./...        # 单元 + 进程内三节点端到端（含拒绝改派、幂等、墓碑、重启恢复）
 ./scripts/e2e.sh     # 真实二进制 + CLI 闭环
 ./scripts/e2e-wake.sh   # 三个容器全在 Docker 里，peach 停止状态，由 apple 用 local 方式唤醒
+./scripts/e2e-ui.sh     # 本机页面：内置页、名录脱敏、页面发现、发起工单、CSP
 go test -tags integration ./internal/wake -run TestRealLocalDocker   # 真实 docker start
 ```
 

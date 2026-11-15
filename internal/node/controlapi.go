@@ -21,6 +21,7 @@ func (n *Node) controlMux() http.Handler {
 			"kind":     n.cfg.Kind,
 			"endpoint": n.cfg.Endpoint,
 			"network":  n.cfg.Network,
+			"version":  n.version,
 		})
 	})
 	mux.HandleFunc("GET /peers", func(w http.ResponseWriter, _ *http.Request) {

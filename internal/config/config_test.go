@@ -82,6 +82,47 @@ func TestSSHWakeNeedsTarget(t *testing.T) {
 	}
 }
 
+func TestUIDefaults(t *testing.T) {
+	p := write(t, `{"name":"a","data_dir":"/tmp/af"}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.UI == nil || c.UI.Listen != "127.0.0.1:7878" {
+		t.Fatalf("默认 UI 配置不对: %+v", c.UI)
+	}
+	if c.UI.Root != "/tmp/af/www" {
+		t.Fatalf("默认页面根目录应跟随 data_dir: %q", c.UI.Root)
+	}
+}
+
+func TestUIDisabled(t *testing.T) {
+	p := write(t, `{"name":"a","ui":{"listen":""}}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.UI.Listen != "" {
+		t.Fatalf("空 listen 应关闭页面: %+v", c.UI)
+	}
+}
+
+func TestUINonLoopbackRejected(t *testing.T) {
+	for _, listen := range []string{"0.0.0.0:7878", "192.168.1.2:7878", ":7878"} {
+		p := write(t, `{"name":"a","ui":{"listen":"`+listen+`"}}`)
+		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "loopback") {
+			t.Fatalf("%s 应被拒绝，得到 %v", listen, err)
+		}
+	}
+}
+
+func TestUILocalhostAllowed(t *testing.T) {
+	p := write(t, `{"name":"a","ui":{"listen":"localhost:7878"}}`)
+	if _, err := Load(p); err != nil {
+		t.Fatalf("localhost 应允许: %v", err)
+	}
+}
+
 func TestUnknownWakeMode(t *testing.T) {
 	p := write(t, `{"name":"a","kind":"wakeable","wake":{"mode":"magic","container":"peach"}}`)
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "wake.mode") {
