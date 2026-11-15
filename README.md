@@ -7,6 +7,38 @@ v1 的目标很窄：**内网、线性工单流转、能跑起来**。
 - 设计：[docs/全流程设计.md](docs/全流程设计.md)
 - 计划与验收：[docs/v1开发计划.md](docs/v1开发计划.md)
 
+## 安装
+
+macOS / Linux：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wong4ga1ming4/billgo/main/scripts/install.sh | sh
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/wong4ga1ming4/billgo/main/scripts/install.ps1 | iex
+```
+
+两个脚本都会下载对应平台的发行包、校验 SHA256，然后安装 `billgo` 与 `billgod`。也可以直接从 [Releases](https://github.com/wong4ga1ming4/billgo/releases) 下载：
+
+| 平台 | 包 |
+|---|---|
+| macOS Intel / Apple Silicon | `billgo_<version>_darwin_amd64.tar.gz` / `_arm64.tar.gz` |
+| Linux x86_64 / arm64 | `billgo_<version>_linux_amd64.tar.gz` / `_arm64.tar.gz` |
+| Windows x64 / arm64 | `billgo_<version>_windows_amd64.zip` / `_arm64.zip` |
+
+指定版本或目录：
+
+```bash
+VERSION=v1.0.0 INSTALL_DIR="$HOME/bin" sh install.sh
+```
+
+```powershell
+.\install.ps1 -Version v1.0.0 -InstallDir C:\tools\billgo
+```
+
 ## 一分钟跑通
 
 不需要 Docker，一台机器即可：

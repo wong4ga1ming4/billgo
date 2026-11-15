@@ -18,7 +18,8 @@ import (
 	"billgo/internal/ticket"
 )
 
-const version = "0.1.0"
+// version 由发布脚本通过 -ldflags "-X main.version=..." 注入。
+var version = "dev"
 
 func main() {
 	args, dataDir := extractDataDir(os.Args[1:])
@@ -31,7 +32,7 @@ func main() {
 
 	var err error
 	switch args[0] {
-	case "version":
+	case "version", "-version", "--version":
 		fmt.Printf("billgo %s\n", version)
 	case "node":
 		err = cmdNode(ctx, c)

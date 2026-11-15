@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -16,9 +17,17 @@ import (
 	"billgo/internal/node"
 )
 
+// version 由发布脚本通过 -ldflags "-X main.version=..." 注入。
+var version = "dev"
+
 func main() {
 	cfgPath := flag.String("config", "billgo.json", "配置文件路径")
+	showVersion := flag.Bool("version", false, "打印版本后退出")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("billgod %s\n", version)
+		return
+	}
 
 	level := slog.LevelInfo
 	if os.Getenv("BILLGO_LOG") == "debug" {
