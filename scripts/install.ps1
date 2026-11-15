@@ -7,7 +7,8 @@
 #   .\install.ps1 -InstallDir C:\tools\billgo
 param(
     [string]$Version = "",
-    [string]$InstallDir = "$env:LOCALAPPDATA\billgo\bin"
+    [string]$InstallDir = "$env:LOCALAPPDATA\billgo\bin",
+    [string]$BaseUrl = "https://github.com/wong4ga1ming4/billgo/releases/download"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +29,7 @@ if (-not $Version) {
 if (-not $Version) { throw "无法获取最新版本，可用 -Version v1.0.0 指定" }
 
 $Asset = "billgo_${Version}_windows_${Arch}.zip"
-$Base = "https://github.com/$Repo/releases/download/$Version"
+$Base = "$BaseUrl/$Version"
 $Tmp = Join-Path $env:TEMP ("billgo-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $Tmp | Out-Null
 

@@ -4,13 +4,15 @@
 #   curl -fsSL https://raw.githubusercontent.com/wong4ga1ming4/billgo/main/scripts/install.sh | sh
 #
 # 可覆盖：
-#   VERSION=v1.0.0   指定版本
-#   INSTALL_DIR=...  指定安装目录（默认 /usr/local/bin，不可写时用 ~/.local/bin）
+#   VERSION=v1.0.0      指定版本
+#   INSTALL_DIR=...     指定安装目录（默认 /usr/local/bin，不可写时用 ~/.local/bin）
+#   BASE_URL=...        发行包地址前缀，默认 GitHub；可用镜像或本地目录（支持 file://）
 set -eu
 
 REPO=${REPO:-wong4ga1ming4/billgo}
 VERSION=${VERSION:-}
 INSTALL_DIR=${INSTALL_DIR:-}
+BASE_URL=${BASE_URL:-https://github.com/$REPO/releases/download}
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -51,7 +53,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 asset="billgo_${VERSION}_${os}_${arch}.tar.gz"
-base="https://github.com/$REPO/releases/download/$VERSION"
+base="$BASE_URL/$VERSION"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 

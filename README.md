@@ -39,6 +39,12 @@ VERSION=v1.0.0 INSTALL_DIR="$HOME/bin" sh install.sh
 .\install.ps1 -Version v1.0.0 -InstallDir C:\tools\billgo
 ```
 
+网络访问 GitHub 受限时，可以把 `BASE_URL`（Windows 是 `-BaseUrl`）指向镜像或本地目录：
+
+```bash
+VERSION=v1.0.0 BASE_URL=https://mirror.example.com/billgo sh install.sh
+```
+
 ## 一分钟跑通
 
 不需要 Docker，一台机器即可：
