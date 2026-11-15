@@ -1,0 +1,4 @@
+data/
+bin/
+deploy/conf/
+*.log

@@ -1,0 +1,28 @@
+name: billgo
+
+services:
+  banana:
+    build:
+      context: ..
+    volumes:
+      - ./conf/banana.json:/etc/billgo/config.json:ro
+      - banana-data:/data
+
+  apple:
+    build:
+      context: ..
+    volumes:
+      - ./conf/apple.json:/etc/billgo/config.json:ro
+      - apple-data:/data
+
+  peach:
+    build:
+      context: ..
+    volumes:
+      - ./conf/peach.json:/etc/billgo/config.json:ro
+      - peach-data:/data
+
+volumes:
+  banana-data:
+  apple-data:
+  peach-data:
