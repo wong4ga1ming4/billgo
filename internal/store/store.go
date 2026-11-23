@@ -5,6 +5,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -161,6 +162,27 @@ func (s *Store) ForEach(bucket []byte, fn func(k, v []byte) error) error {
 	}
 	return db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucket).ForEach(fn)
+	})
+}
+
+// ForEachPrefix 只遍历以 prefix 开头的键。键按字节序排列，工单事件因此不必扫全表。
+func (s *Store) ForEachPrefix(bucket, prefix []byte, fn func(k, v []byte) error) error {
+	db, err := s.handle()
+	if err != nil {
+		return err
+	}
+	return db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucket)
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			if err := fn(k, v); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

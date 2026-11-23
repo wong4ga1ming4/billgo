@@ -40,7 +40,7 @@ func main() {
 		slog.Error("读配置失败", "err", err)
 		os.Exit(1)
 	}
-	n, err := node.NewWithOptions(cfg, node.Options{Version: version})
+	n, err := node.NewWithOptions(cfg, node.Options{Version: version, ConfigPath: *cfgPath})
 	if err != nil {
 		slog.Error("装配节点失败", "err", err)
 		os.Exit(1)

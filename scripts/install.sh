@@ -90,6 +90,7 @@ mkdir -p "$INSTALL_DIR"
 src="$tmp/billgo_${VERSION}_${os}_${arch}"
 install -m 0755 "$src/billgod" "$INSTALL_DIR/billgod"
 install -m 0755 "$src/billgo" "$INSTALL_DIR/billgo"
+install -m 0755 "$src/billui" "$INSTALL_DIR/billui"
 
 echo "已安装 $VERSION 到 $INSTALL_DIR"
 case ":$PATH:" in

@@ -28,6 +28,8 @@ const (
 	TypeHopAccept   = "hop.accept"
 	TypeHopReject   = "hop.reject"
 	TypeHopDeliver  = "hop.deliver"
+	TypeCtlRequest  = "ctl.request"
+	TypeCtlResponse = "ctl.response"
 )
 
 // 可分类的错误，调用方用 errors.Is 判断后决定重试还是丢弃。
@@ -120,10 +122,10 @@ func (e *Envelope) CheckAddress(self string) error {
 	return nil
 }
 
-// CheckFresh 只对 hop.* 生效：消息必须落在时间窗口内，防止重放。
+// CheckFresh 对 hop.* 和控制请求生效：消息必须落在时间窗口内，防止重放。
 // 名录消息可能是被转发的旧记录，靠签名和版本号判断，不看时间。
 func (e *Envelope) CheckFresh(now time.Time, window time.Duration) error {
-	if !isHop(e.Type) {
+	if !needsFresh(e.Type) {
 		return nil
 	}
 	dt := now.UnixMilli() - e.TS
@@ -139,7 +141,7 @@ func (e *Envelope) CheckFresh(now time.Time, window time.Duration) error {
 // IdempotencyKey 返回幂等键；第二个返回值表示该消息是否需要去重。
 //
 // 工单消息用 (ticket, hop, type)；名录记录用 (peer_id, version)。
-// digest/sync 是只读的，不去重。
+// 控制请求用 body 里的 id。digest/sync 是只读的，不去重。
 func (e *Envelope) IdempotencyKey() (string, bool, error) {
 	switch e.Type {
 	case TypeHopIssue, TypeHopAccept, TypeHopReject, TypeHopDeliver:
@@ -163,6 +165,14 @@ func (e *Envelope) IdempotencyKey() (string, bool, error) {
 		}
 		owner := identity.Fingerprint(ed25519.PublicKey(pub))[:identity.PeerIDLen]
 		return fmt.Sprintf("peer|%s|%d", owner, body.Version), true, nil
+	case TypeCtlRequest:
+		var body struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(e.Body, &body) == nil && body.ID != "" {
+			return "ctl|" + body.ID, true, nil
+		}
+		return "", false, nil
 	default:
 		return "", false, nil
 	}
@@ -243,4 +253,8 @@ func isHop(typ string) bool {
 		return true
 	}
 	return false
+}
+
+func needsFresh(typ string) bool {
+	return isHop(typ) || typ == TypeCtlRequest || typ == TypeCtlResponse
 }

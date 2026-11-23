@@ -1,0 +1,37 @@
+全流程手工测试
+[x] 配置支持环境变量覆盖（env > 文件 > 默认）：
+  BILLGO_BOOTSTRAP / BILLGO_ALLOW_FROM（逗号分隔）
+  BILLGO_NAME / BILLGO_KIND / BILLGO_NETWORK / BILLGO_ENDPOINT / BILLGO_UI_LISTEN
+  其余配置仍走文件
+
+排队与交付边界：
+  [ ] max_jobs 配置（默认 1）
+  [ ] job 增加 queued 状态与 queued_at
+  [ ] 拒绝 expired / voided 工单的迟到交付
+  [ ] outbox 按 peer 并发（可选）
+
+CLI 整理（要干净，不保留兼容）：
+  目标命令树：
+    version
+    status [--me]     总览；--me 只看自己
+    config            读 + 写配置
+    peers
+    ticket ...
+    outbox
+    wake / withdraw
+  [ ] 删除 node 命令，不留别名
+  [ ] status --me 输出自身信息
+  [ ] config 从只读改为可写
+  [ ] 帮助与 README 按新命令树重写
+
+待讨论：
+  config 写入的语义——改文件后重启 / 热更新 / 与 env 的优先级
+  status --json（Agent 用）
+  peers 是否改成 peer list
+
+billgo / billui 重构（见 docs/重构说明.md）：
+  [x] 阶段一：billgo 远程只读（控制信封、access 权限、审计、--peer、分页）
+  [x] 阶段二：billui 骨架（登录、密码每次启动重置、本机页面）
+  [x] 阶段三：删除 internal/webui，billgod 不再监听页面
+  [x] 阶段四：远程写（tickets / config）
+  [x] 阶段五：审计页面、默认全开警告、打磨

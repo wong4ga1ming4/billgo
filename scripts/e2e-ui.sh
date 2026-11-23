@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# 本机页面冒烟：内置页、接口、页面发现、发起工单、CSP。
+# billui 冒烟：未登录进不去，密码登录后能看到本节点。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 WORK=$(mktemp -d /tmp/bg-ui.XXXXXX)
-PID=""
+PIDS=""
 cleanup() {
-  if [ -n "${PID:-}" ]; then
-    kill "$PID" 2>/dev/null || true
-    wait "$PID" 2>/dev/null || true
+  if [ -n "${PIDS:-}" ]; then
+    # shellcheck disable=SC2086
+    kill $PIDS 2>/dev/null || true
+    # shellcheck disable=SC2086
+    wait $PIDS 2>/dev/null || true
   fi
   rm -rf "$WORK"
 }
@@ -17,8 +19,7 @@ trap cleanup EXIT
 echo "==> 编译"
 go build -o "$WORK/billgod" ./cmd/billgod
 go build -o "$WORK/billgo" ./cmd/billgo
-DAEMON="$WORK/billgod"
-CLI="$WORK/billgo"
+go build -o "$WORK/billui" ./cmd/billui
 NET_PORT=18991
 UI_PORT=18992
 BASE="http://127.0.0.1:$UI_PORT"
@@ -31,7 +32,6 @@ cat >"$WORK/config.json" <<EOF
   "network": "ui-e2e",
   "listen": "127.0.0.1:$NET_PORT",
   "data_dir": "$WORK/data",
-  "ui": {"listen": "127.0.0.1:$UI_PORT"},
   "anti_entropy_sec": 1,
   "accept_timeout_min": 5,
   "deliver_timeout_min": 5,
@@ -39,64 +39,44 @@ cat >"$WORK/config.json" <<EOF
 }
 EOF
 
-echo "==> 启动节点"
-"$DAEMON" -config "$WORK/config.json" >"$WORK/log.txt" 2>&1 &
-PID=$!
+echo "==> 启动节点和页面"
+"$WORK/billgod" -config "$WORK/config.json" >"$WORK/node.log" 2>&1 &
+PIDS="$!"
+"$WORK/billui" -data "$WORK/data" -listen "127.0.0.1:$UI_PORT" >"$WORK/ui.log" 2>&1 &
+PIDS="$PIDS $!"
 for _ in $(seq 1 100); do
-  "$CLI" --data "$WORK/data" node >/dev/null 2>&1 && break
+  "$WORK/billgo" --data "$WORK/data" node >/dev/null 2>&1 && break
   sleep 0.1
 done
-if ! "$CLI" --data "$WORK/data" node >/dev/null 2>&1; then
-  cat "$WORK/log.txt" >&2
-  exit 1
-fi
+"$WORK/billgo" --data "$WORK/data" node >/dev/null
+for _ in $(seq 1 50); do
+  curl -sf -o /dev/null "$BASE/login" && break
+  sleep 0.1
+done
 
 contains() {
   case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac
 }
 
-echo "==> 内置页面与接口"
-page=$(curl -fsS "$BASE/")
-contains "$page" "billgo" || { echo "主页内容不对" >&2; exit 1; }
+echo "==> 未登录不能看主页"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/")
+[ "$code" = "303" ] || { echo "未登录应 303，得到 $code" >&2; exit 1; }
 
-node_json=$(curl -fsS "$BASE/api/node")
-contains "$node_json" '"peer_id"' || { echo "缺少 peer_id" >&2; exit 1; }
-contains "$node_json" '"version"' || { echo "缺少 version" >&2; exit 1; }
-PEER_ID=$(printf '%s' "$node_json" | sed -n 's/.*"peer_id":"\([^"]*\)".*/\1/p')
-[ -n "$PEER_ID" ] || { echo "解析 peer_id 失败" >&2; exit 1; }
+pw=$(tr -d '[:space:]' <"$WORK/data/billui.password")
+[ -n "$pw" ] || { echo "没有密码文件" >&2; cat "$WORK/ui.log" >&2; exit 1; }
+contains "$(cat "$WORK/ui.log")" "$pw" || { echo "日志里没有密码" >&2; exit 1; }
 
-peers=$(curl -fsS "$BASE/api/peers")
-if contains "$peers" "pubkey"; then
-  echo "名录接口泄露了公钥" >&2
-  exit 1
-fi
-
-echo "==> 页面发现"
-printf '<html><title>Hello from Agent</title></html>' >"$WORK/data/www/pages/hello.html"
-pages=$(curl -fsS "$BASE/api/pages")
-contains "$pages" "Hello from Agent" || { echo "新增页面没有被发现: $pages" >&2; exit 1; }
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/pages/hello.html")
-[ "$code" = "200" ] || { echo "页面访问返回 $code" >&2; exit 1; }
-
-echo "==> 发起工单"
-form='{"task":"ui smoke"}'
-resp=$(curl -fsS -X POST "$BASE/api/tickets" \
-  -H 'Content-Type: application/json' \
-  --data "{\"form\":$form,\"flow\":[\"$PEER_ID\"]}")
-contains "$resp" '"id"' || { echo "创建工单失败: $resp" >&2; exit 1; }
-TID=$(printf '%s' "$resp" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-[ -n "$TID" ] || { echo "解析工单号失败" >&2; exit 1; }
-
-list=$(curl -fsS "$BASE/api/tickets")
-contains "$list" "$TID" || { echo "工单没有出现在列表里" >&2; exit 1; }
-detail=$(curl -fsS "$BASE/api/tickets/$TID")
-contains "$detail" "$TID" || { echo "工单详情不对" >&2; exit 1; }
-
-echo "==> 安全头"
-hdr=$(curl -s -D - -o /dev/null "$BASE/")
-contains "$hdr" "connect-src 'self'" || { echo "内置页 CSP 不对" >&2; exit 1; }
+echo "==> 登录后看到本节点"
+curl -fsS -c "$WORK/cj" -o /dev/null -d "password=$pw" "$BASE/login"
+page=$(curl -fsS -b "$WORK/cj" "$BASE/")
+contains "$page" "apple" || { echo "主页没有节点名: $page" >&2; exit 1; }
+contains "$page" "远程读默认开放" || { echo "主页没有读开放提示: $page" >&2; exit 1; }
+contains "$(cat "$WORK/node.log")" "远程读默认开放" || { echo "节点日志没有读开放警告" >&2; cat "$WORK/node.log" >&2; exit 1; }
+audit=$(curl -fsS -b "$WORK/cj" "$BASE/audit")
+contains "$audit" "没有记录" || { echo "审计页不对: $audit" >&2; exit 1; }
+contains "$page" "default-src" && { echo "页面正文不应带 CSP 文本" >&2; exit 1; }
+hdr=$(curl -fsS -D - -o /dev/null -b "$WORK/cj" "$BASE/")
+contains "$hdr" "default-src 'none'" || { echo "CSP 不对: $hdr" >&2; exit 1; }
 contains "$hdr" "no-store" || { echo "缺少 no-store" >&2; exit 1; }
-hdr=$(curl -s -D - -o /dev/null "$BASE/pages/hello.html")
-contains "$hdr" "'unsafe-inline'" || { echo "Agent 页 CSP 不对" >&2; exit 1; }
 
 echo "ui e2e 通过"

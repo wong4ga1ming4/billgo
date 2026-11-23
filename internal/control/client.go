@@ -29,6 +29,45 @@ func NewClient(dataDir string) *Client {
 	return &Client{socket: socket, hc: &http.Client{Transport: tr, Timeout: 30 * time.Second}}
 }
 
+// Call 让本机节点执行一个控制动作。peer 为空表示自己，否则是邻居的名字或 peer_id。
+func (c *Client) Call(ctx context.Context, peer, action string, args, out any) error {
+	body := map[string]any{"action": action}
+	if peer != "" {
+		body["peer"] = peer
+	}
+	if args != nil {
+		body["args"] = args
+	}
+	if err := c.Do(ctx, http.MethodPost, "/ctl", body, out); err != nil {
+		return unwrapAPIError(err)
+	}
+	return nil
+}
+
+// APIError 是控制面返回的可分类错误。Code 见节点的 denied / unreachable / timeout / not_found。
+type APIError struct {
+	Message string
+	Code    string
+}
+
+func (e *APIError) Error() string {
+	if e.Code == "" {
+		return e.Message
+	}
+	return e.Message + " (" + e.Code + ")"
+}
+
+func unwrapAPIError(err error) error {
+	var parsed struct {
+		Error string `json:"error"`
+		Code  string `json:"error_code"`
+	}
+	if json.Unmarshal([]byte(err.Error()), &parsed) == nil && parsed.Error != "" {
+		return &APIError{Message: parsed.Error, Code: parsed.Code}
+	}
+	return err
+}
+
 // Do 发一个 JSON 请求并解析 JSON 响应。
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader

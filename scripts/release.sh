@@ -41,6 +41,8 @@ for target in $TARGETS; do
     -o "$dir/billgod$ext" ./cmd/billgod
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" \
     -o "$dir/billgo$ext" ./cmd/billgo
+  CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" \
+    -o "$dir/billui$ext" ./cmd/billui
   cp README.md "$dir/"
   if [ "$os" != "windows" ]; then
     cp scripts/wake.sh "$dir/"

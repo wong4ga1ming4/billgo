@@ -48,6 +48,27 @@ func TestLoadOverrides(t *testing.T) {
 	}
 }
 
+func TestAccessPolicy(t *testing.T) {
+	p := write(t, `{
+		"name": "a",
+		"access": {
+			"default": "allow",
+			"rules": [{"peer": "*", "deny": ["config.write"]}]
+		}
+	}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Access == nil || !c.Access.Decide("peer", "config.read") || c.Access.Decide("peer", "config.write") {
+		t.Fatalf("access 判定不对: %+v", c.Access)
+	}
+	bad := write(t, `{"name":"a","access":{"default":"open"}}`)
+	if _, err := Load(bad); err == nil || !strings.Contains(err.Error(), "default") {
+		t.Fatalf("非法 access 应报错，得到 %v", err)
+	}
+}
+
 func TestUnknownFieldRejected(t *testing.T) {
 	p := write(t, `{"name":"a","knd":"resident"}`)
 	_, err := Load(p)
@@ -82,44 +103,10 @@ func TestSSHWakeNeedsTarget(t *testing.T) {
 	}
 }
 
-func TestUIDefaults(t *testing.T) {
-	p := write(t, `{"name":"a","data_dir":"/tmp/af"}`)
-	c, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.UI == nil || c.UI.Listen != "127.0.0.1:7878" {
-		t.Fatalf("默认 UI 配置不对: %+v", c.UI)
-	}
-	if c.UI.Root != "/tmp/af/www" {
-		t.Fatalf("默认页面根目录应跟随 data_dir: %q", c.UI.Root)
-	}
-}
-
-func TestUIDisabled(t *testing.T) {
-	p := write(t, `{"name":"a","ui":{"listen":""}}`)
-	c, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.UI.Listen != "" {
-		t.Fatalf("空 listen 应关闭页面: %+v", c.UI)
-	}
-}
-
-func TestUINonLoopbackRejected(t *testing.T) {
-	for _, listen := range []string{"0.0.0.0:7878", "192.168.1.2:7878", ":7878"} {
-		p := write(t, `{"name":"a","ui":{"listen":"`+listen+`"}}`)
-		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "loopback") {
-			t.Fatalf("%s 应被拒绝，得到 %v", listen, err)
-		}
-	}
-}
-
-func TestUILocalhostAllowed(t *testing.T) {
-	p := write(t, `{"name":"a","ui":{"listen":"localhost:7878"}}`)
-	if _, err := Load(p); err != nil {
-		t.Fatalf("localhost 应允许: %v", err)
+func TestUnknownFieldUIRejected(t *testing.T) {
+	p := write(t, `{"name":"a","ui":{"listen":"127.0.0.1:7878"}}`)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "ui") {
+		t.Fatalf("节点配置不再接受 ui，得到 %v", err)
 	}
 }
 
@@ -127,5 +114,62 @@ func TestUnknownWakeMode(t *testing.T) {
 	p := write(t, `{"name":"a","kind":"wakeable","wake":{"mode":"magic","container":"peach"}}`)
 	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "wake.mode") {
 		t.Fatalf("未知唤醒方式应报错，得到 %v", err)
+	}
+}
+
+func TestEnvOverridesFile(t *testing.T) {
+	p := write(t, `{"name":"from-file","bootstrap":["https://old:1#aaaaaaaaaaaaaaaa"]}`)
+	t.Setenv("BILLGO_NAME", "from-env")
+	t.Setenv("BILLGO_KIND", "resident")
+	t.Setenv("BILLGO_NETWORK", "envnet")
+	t.Setenv("BILLGO_ENDPOINT", "https://env:8787")
+	t.Setenv("BILLGO_BOOTSTRAP", "https://a:1#aaaaaaaaaaaaaaaa, https://b:2#bbbbbbbbbbbbbbbb")
+	t.Setenv("BILLGO_ALLOW_FROM", "aaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbbb")
+
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Name != "from-env" || c.Network != "envnet" || c.Endpoint != "https://env:8787" {
+		t.Fatalf("字符串覆盖失败: %+v", c)
+	}
+	if len(c.Bootstrap) != 2 || c.Bootstrap[0] != "https://a:1#aaaaaaaaaaaaaaaa" {
+		t.Fatalf("bootstrap 覆盖失败: %+v", c.Bootstrap)
+	}
+	if len(c.AllowFrom) != 2 || c.AllowFrom[1] != "bbbbbbbbbbbbbbbb" {
+		t.Fatalf("allow_from 覆盖失败: %+v", c.AllowFrom)
+	}
+}
+
+func TestEnvWithoutFile(t *testing.T) {
+	t.Setenv("BILLGO_NAME", "envonly")
+	t.Setenv("BILLGO_BOOTSTRAP", "https://a:1#aaaaaaaaaaaaaaaa")
+
+	c, err := Load(filepath.Join(t.TempDir(), "nope.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Name != "envonly" || len(c.Bootstrap) != 1 {
+		t.Fatalf("无文件时环境变量应生效: %+v", c)
+	}
+}
+
+func TestEnvListTrimsEmpty(t *testing.T) {
+	p := write(t, `{"name":"a"}`)
+	t.Setenv("BILLGO_ALLOW_FROM", " a , , b ")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AllowFrom) != 2 || c.AllowFrom[0] != "a" || c.AllowFrom[1] != "b" {
+		t.Fatalf("列表解析不对: %+v", c.AllowFrom)
+	}
+}
+
+func TestEnvInvalidBootstrap(t *testing.T) {
+	p := write(t, `{"name":"a"}`)
+	t.Setenv("BILLGO_BOOTSTRAP", "not-a-url")
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "bootstrap") {
+		t.Fatalf("非法 bootstrap 应报错，得到 %v", err)
 	}
 }

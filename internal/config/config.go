@@ -6,6 +6,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,8 +14,9 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"billgo/internal/access"
 )
 
 // Kind 节点的两种形态。
@@ -37,29 +39,20 @@ type Wake struct {
 	HostFP    string `json:"host_fp"`   // 仅 ssh：SSH 主机指纹，连的时候固定
 }
 
-// UIConfig 内置页面配置。
-//
-// Listen 为空表示关闭；非 loopback 地址会在启动时被拒绝。
-// Root 是 Agent 可写的静态目录，默认 <data_dir>/www。
-type UIConfig struct {
-	Listen string `json:"listen"`
-	Root   string `json:"root,omitempty"`
-}
-
 // Config 一个节点的全部运行配置。
 type Config struct {
-	Name      string    `json:"name"`       // 别名，只作展示，不唯一
-	Desc      string    `json:"desc"`       // 自由描述，发起者按它选节点
-	Kind      string    `json:"kind"`       // resident | wakeable
-	Network   string    `json:"network"`    // 域标识，默认 default
-	Listen    string    `json:"listen"`     // HTTP 监听地址
-	Endpoint  string    `json:"endpoint"`   // 对外地址，如 https://10.0.0.2:8787
-	DataDir   string    `json:"data_dir"`   // 数据目录（bbolt + blobs + 私钥）
-	Bootstrap []string  `json:"bootstrap"`  // 启动时拉名录的已知节点（https://h:p#peer_id）
-	AllowFrom []string  `json:"allow_from"` // 允许派单给我的 peer_id；空 = 全拒
-	Wake      *Wake     `json:"wake,omitempty"`
-	UI        *UIConfig `json:"ui,omitempty"`
-	AgentCmd  []string  `json:"agent_cmd"` // 接活时执行的命令，空 = 只接受不执行
+	Name      string         `json:"name"`       // 别名，只作展示，不唯一
+	Desc      string         `json:"desc"`       // 自由描述，发起者按它选节点
+	Kind      string         `json:"kind"`       // resident | wakeable
+	Network   string         `json:"network"`    // 域标识，默认 default
+	Listen    string         `json:"listen"`     // HTTP 监听地址
+	Endpoint  string         `json:"endpoint"`   // 对外地址，如 https://10.0.0.2:8787
+	DataDir   string         `json:"data_dir"`   // 数据目录（bbolt + blobs + 私钥）
+	Bootstrap []string       `json:"bootstrap"`  // 启动时拉名录的已知节点（https://h:p#peer_id）
+	AllowFrom []string       `json:"allow_from"` // 允许派单给我的 peer_id；空 = 全拒
+	Wake      *Wake          `json:"wake,omitempty"`
+	Access    *access.Policy `json:"access,omitempty"` // 谁能远程读/写本节点；省略 = 读允许、写拒绝
+	AgentCmd  []string       `json:"agent_cmd"`        // 接活时执行的命令，空 = 只接受不执行
 
 	AcceptTimeoutMin  int `json:"accept_timeout_min"`  // 派单后多久未受理算超时
 	DeliverTimeoutMin int `json:"deliver_timeout_min"` // 受理后多久未交付算超时
@@ -75,7 +68,6 @@ func Default() *Config {
 		Network:           "default",
 		Listen:            "0.0.0.0:8787",
 		DataDir:           "data",
-		UI:                &UIConfig{Listen: "127.0.0.1:7878"},
 		AcceptTimeoutMin:  30,
 		DeliverTimeoutMin: 120,
 		JobTimeoutMin:     60,
@@ -83,29 +75,104 @@ func Default() *Config {
 	}
 }
 
-// Load 读配置文件；文件不存在时返回默认值。
+// Load 读配置文件；文件不存在时用默认值。
+// 优先级：环境变量 > 文件 > 默认值。
 func Load(path string) (*Config, error) {
 	c := Default()
 	f, err := os.Open(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		c.fillDefaults()
-		return c, nil
-	}
-	if err != nil {
+	switch {
+	case err == nil:
+		defer f.Close()
+		dec := json.NewDecoder(f)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(c); err != nil {
+			return nil, fmt.Errorf("解析配置 %s: %w", path, err)
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		// 没有文件就只用默认值，环境变量仍然生效
+	default:
 		return nil, fmt.Errorf("打开配置 %s: %w", path, err)
 	}
-	defer f.Close()
-
-	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(c); err != nil {
-		return nil, fmt.Errorf("解析配置 %s: %w", path, err)
-	}
 	c.fillDefaults()
+	c.applyEnv()
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("配置 %s: %w", path, err)
 	}
 	return c, nil
+}
+
+// Parse 解析一份要写入磁盘的配置。不套环境变量：文件里是文件，
+// 下次启动时环境变量仍然盖过文件。
+func Parse(raw []byte) (*Config, error) {
+	c := Default()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(c); err != nil {
+		return nil, fmt.Errorf("解析配置: %w", err)
+	}
+	c.fillDefaults()
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// Save 把配置写到 path，先写临时文件再替换。
+func Save(path string, c *Config) error {
+	if path == "" {
+		return errors.New("没有配置文件路径")
+	}
+	raw, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return fmt.Errorf("写配置: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(path)
+		if err2 := os.Rename(tmp, path); err2 != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("替换配置: %w", err2)
+		}
+	}
+	return nil
+}
+
+// applyEnv 用环境变量覆盖配置。只覆盖容器部署时会变的字段；
+// agent_cmd、wake、超时等结构复杂的配置仍走文件。
+func (c *Config) applyEnv() {
+	if v, ok := os.LookupEnv("BILLGO_NAME"); ok {
+		c.Name = v
+	}
+	if v, ok := os.LookupEnv("BILLGO_KIND"); ok {
+		c.Kind = v
+	}
+	if v, ok := os.LookupEnv("BILLGO_NETWORK"); ok {
+		c.Network = v
+	}
+	if v, ok := os.LookupEnv("BILLGO_ENDPOINT"); ok {
+		c.Endpoint = v
+	}
+	if v, ok := os.LookupEnv("BILLGO_BOOTSTRAP"); ok {
+		c.Bootstrap = splitList(v)
+	}
+	if v, ok := os.LookupEnv("BILLGO_ALLOW_FROM"); ok {
+		c.AllowFrom = splitList(v)
+	}
+}
+
+// splitList 解析逗号分隔的列表，忽略空项和首尾空白。
+func splitList(v string) []string {
+	out := []string{}
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // fillDefaults 补齐文件里省略的可选项。
@@ -134,12 +201,6 @@ func (c *Config) fillDefaults() {
 	}
 	if c.AntiEntropySec <= 0 {
 		c.AntiEntropySec = d.AntiEntropySec
-	}
-	if c.UI == nil {
-		c.UI = &UIConfig{Listen: "127.0.0.1:7878"}
-	}
-	if c.UI.Root == "" {
-		c.UI.Root = filepath.Join(c.DataDir, "www")
 	}
 }
 
@@ -234,19 +295,8 @@ func (c *Config) Validate() error {
 	if _, err := c.ParsedBootstrap(); err != nil {
 		return err
 	}
-	if c.UI != nil && c.UI.Listen != "" {
-		host, _, err := net.SplitHostPort(c.UI.Listen)
-		if err != nil {
-			return fmt.Errorf("ui.listen %q: %w", c.UI.Listen, err)
-		}
-		switch host {
-		case "127.0.0.1", "localhost", "::1":
-		default:
-			return fmt.Errorf("ui.listen 只允许 loopback（127.0.0.1 / localhost / ::1），得到 %q", c.UI.Listen)
-		}
-		if c.UI.Root == "" {
-			return errors.New("ui.root 不能为空")
-		}
+	if err := c.Access.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

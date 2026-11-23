@@ -111,18 +111,24 @@ func (s *Service) Get(tid string) (State, []Event, error) {
 	return st, evs, err
 }
 
-// List 列出本节点发起或参与过的全部工单。
+// List 列出本节点发起或参与过的全部工单。一次扫完事件桶，避免每张工单再扫一遍。
 func (s *Service) List() []State {
-	ids := map[string]bool{}
-	s.st.ForEach(TicketsBucket, func(k, _ []byte) error {
-		if i := strings.IndexByte(string(k), '|'); i > 0 {
-			ids[string(k)[:i]] = true
+	grouped := map[string][]Event{}
+	s.st.ForEach(TicketsBucket, func(k, v []byte) error {
+		rawKey := string(k)
+		i := strings.IndexByte(rawKey, '|')
+		if i <= 0 {
+			return nil
+		}
+		var ev Event
+		if json.Unmarshal(v, &ev) == nil {
+			grouped[rawKey[:i]] = append(grouped[rawKey[:i]], ev)
 		}
 		return nil
 	})
-	out := make([]State, 0, len(ids))
-	for tid := range ids {
-		if st, _, err := s.Get(tid); err == nil {
+	out := make([]State, 0, len(grouped))
+	for tid, evs := range grouped {
+		if st, err := Derive(tid, evs); err == nil {
 			out = append(out, st)
 		}
 	}
@@ -133,10 +139,7 @@ func (s *Service) List() []State {
 func (s *Service) Receipts(tid string) ([]Receipt, error) {
 	prefix := tid + "|"
 	var out []Receipt
-	err := s.st.ForEach(ReceiptsBucket, func(k, v []byte) error {
-		if !strings.HasPrefix(string(k), prefix) {
-			return nil
-		}
+	err := s.st.ForEachPrefix(ReceiptsBucket, []byte(prefix), func(k, v []byte) error {
 		var r Receipt
 		if json.Unmarshal(v, &r) == nil {
 			out = append(out, r)
@@ -150,10 +153,7 @@ func (s *Service) Receipts(tid string) ([]Receipt, error) {
 func (s *Service) Events(tid string) ([]Event, error) {
 	prefix := tid + "|"
 	var out []Event
-	err := s.st.ForEach(TicketsBucket, func(k, v []byte) error {
-		if !strings.HasPrefix(string(k), prefix) {
-			return nil
-		}
+	err := s.st.ForEachPrefix(TicketsBucket, []byte(prefix), func(k, v []byte) error {
 		var ev Event
 		if err := json.Unmarshal(v, &ev); err == nil {
 			out = append(out, ev)

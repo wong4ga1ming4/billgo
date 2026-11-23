@@ -53,6 +53,7 @@ try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Copy-Item (Join-Path $Src "billgod.exe") (Join-Path $InstallDir "billgod.exe") -Force
     Copy-Item (Join-Path $Src "billgo.exe") (Join-Path $InstallDir "billgo.exe") -Force
+    Copy-Item (Join-Path $Src "billui.exe") (Join-Path $InstallDir "billui.exe") -Force
 
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if ($UserPath -notlike "*$InstallDir*") {

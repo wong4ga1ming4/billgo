@@ -21,7 +21,7 @@ Windows（PowerShell）：
 irm https://raw.githubusercontent.com/wong4ga1ming4/billgo/main/scripts/install.ps1 | iex
 ```
 
-两个脚本都会下载对应平台的发行包、校验 SHA256，然后安装 `billgo` 与 `billgod`。也可以直接从 [Releases](https://github.com/wong4ga1ming4/billgo/releases) 下载：
+两个脚本都会下载对应平台的发行包、校验 SHA256，然后安装 `billgo`、`billgod` 与 `billui`。也可以直接从 [Releases](https://github.com/wong4ga1ming4/billgo/releases) 下载：
 
 | 平台 | 包 |
 |---|---|
@@ -47,33 +47,23 @@ VERSION=v1.0.0 BASE_URL=https://mirror.example.com/billgo sh install.sh
 
 ## 本机页面
 
-节点默认在 `127.0.0.1:7878` 提供一个页面，浏览器打开：
+页面是单独的 `billui` 进程，不在 `billgod` 里。它只问本机节点。默认监听 `127.0.0.1:7878`：
 
-```
-http://127.0.0.1:7878/
-```
-
-可以看自身信息、配置（只读）、状态、待处理项、名录、工单，也可以发起工单、下载交付物。
-
-**Agent 的页面**放在数据目录的 `pages/` 下，加文件即出现在主页面的链接里：
-
-```
-data/www/pages/report.html          自动出现（标题取 <title>）
-data/www/pages/report.json          {"title": "周报", "desc": "..."} 可选
+```bash
+billui -data data
 ```
 
-首次启动会生成 `pages/README.md` 与示例页。页面允许内联脚本和样式，但**禁止外部 CDN**，所有资源必须同源。
+浏览器打开 `http://127.0.0.1:7878/`。每次启动都会生成新密码，打在日志里，并写入 `data/billui.password`（权限 0600）。重启后旧会话失效。
 
-配置：
+可以看本节点的状态、配置摘要、名录和工单，也可以点开一个邻居看它此刻的配置和工单。工单列表不含表单。配置或内容被拒时，列表还在，打开单张工单会显示「内容不可见」。离线显示「离线/不可达」，超时显示「超时」。都不自动重试，点「再试一次」才会再问，不保留上次的内容。读默认开放时首页会提示。审计页只看谁访问过本机。页面上可以发起、改派、作废。改配置用 `billgo config write`。
 
-```json
-{"ui": {"listen": "127.0.0.1:7878", "root": "data/www"}}
+容器里默认同样只绑回环。要从宿主机打开：
+
+```bash
+docker run -e BILLUI_LISTEN=0.0.0.0:7878 -p 127.0.0.1:7878:7878 ...
 ```
 
-- `listen` 只能填 loopback（`127.0.0.1` / `localhost` / `::1`），填别的会拒绝启动。
-- 设为空字符串关闭页面。
-- 容器里用 `-p 127.0.0.1:7878:7878`，**不要** `-p 7878:7878`（会把无鉴权页面暴露到内网）。
-- 跨机器访问走 SSH 隧道：`ssh -L 7878:127.0.0.1:7878 host`。
+不要把端口公布到 `0.0.0.0`。`BILLUI=0` 时容器只跑节点。监听地址可以不是 loopback，因为页面有密码。
 
 ## 一分钟跑通
 
@@ -101,12 +91,13 @@ docker compose -f deploy/compose.yaml down -v   # 清理
 - **工单归发起者**：表单、流转图、每一跳的交付物都在发起者本地；接活方只做这一跳，留一张回执。
 - **先落盘再发送**：出站信封先进队列，至少一次投递 + 幂等执行。
 
-## 两个二进制
+## 三个二进制
 
 | 命令 | 作用 |
 |---|---|
-| `billgod` | 节点守护进程：监听 TLS、维护名录、驱动工单、本地控制 socket |
-| `billgo` | 前端 CLI：通过数据目录下的 Unix socket 与本机节点对话 |
+| `billgod` | 节点守护进程：监听 TLS、维护名录、驱动工单、本地控制 socket。没有页面 |
+| `billgo` | 命令行：通过数据目录下的 Unix socket 与本机节点对话 |
+| `billui` | 可选页面：登录后通过同一个 socket 看本机和邻居。billgod 不依赖它 |
 
 网络端口只认签名信封；控制面只对本机开放（socket 权限 0600）。
 
@@ -132,7 +123,6 @@ docker compose -f deploy/compose.yaml down -v   # 清理
     "host_fp": "SHA256:..."
   },
   "agent_cmd": ["/bin/sh", "-c", "echo done > \"$BILLGO_OUT_DIR/result.txt\""],
-  "ui": {"listen": "127.0.0.1:7878", "root": "/data/www"},
   "accept_timeout_min": 30,
   "deliver_timeout_min": 120,
   "job_timeout_min": 60,
@@ -146,8 +136,103 @@ docker compose -f deploy/compose.yaml down -v   # 清理
 - `allow_from` 是派单白名单，**空表示全部拒绝**。填发起者的 `peer_id`。
 - `endpoint` 是别人连你用的地址。监听 `0.0.0.0` 或跑在容器里时必须显式填写。
 - `wake` 只有 `kind: "wakeable"` 必填。`mode` 为 `ssh`（需 `target`）或 `local`（只需 `container`）；`agent_cmd` 是接活时执行的命令，为空表示不接受作业。
-- `ui` 是内置页面：`listen` 只能 loopback，空字符串关闭；`root` 默认 `<data_dir>/www`，Agent 的页面放在其 `pages/` 下。
+- 节点配置里没有页面字段。页面用 `billui` 的 `-listen` 或 `BILLUI_LISTEN`。
 - 换 `network` 就是另一个域，记录互相隔离。
+
+### 环境变量
+
+容器部署时可以用环境变量覆盖配置，优先级 **环境变量 > 配置文件 > 默认值**。
+
+- 只有变量存在才覆盖；没设置就沿用文件。
+- 设置成空字符串也算覆盖。
+- 合并后仍会走校验，填错直接启动失败。
+
+| 变量 | 字段 | 格式 | 空值 / 错误时 |
+|---|---|---|---|
+| `BILLGO_NAME` | `name` | 任意字符串 | 空 → 启动失败 |
+| `BILLGO_KIND` | `kind` | `resident` / `wakeable` | 其他值 → 启动失败 |
+| `BILLGO_NETWORK` | `network` | 域标识 | 空 → 启动失败 |
+| `BILLGO_ENDPOINT` | `endpoint` | `https://host:port` | 空 → 按 `listen` 推导（`0.0.0.0` 会变成 `127.0.0.1`） |
+| `BILLGO_BOOTSTRAP` | `bootstrap` | 逗号分隔的 `https://host:port#peer_id` | 空 → 不配邻居；格式错 → 启动失败 |
+| `BILLGO_ALLOW_FROM` | `allow_from` | 逗号分隔的 16 位 peer_id | 空 → **全部拒绝** |
+
+几个容易踩的点：
+
+- **`BILLGO_BOOTSTRAP`**：`#` 后面的 16 位 peer_id 不能省，第一次连接就要固定 TLS 指纹；只配一个邻居就够，其余节点靠反熵发现；多个用逗号分隔，元素里不能有逗号。
+- **`BILLGO_ALLOW_FROM`**：这是**接收方**的白名单，不是发起方授权；必须写 peer_id，不能写名字；不设置或为空等于谁都拒。
+- **`BILLGO_ENDPOINT`**：别人连你用的地址。容器里要写服务名（如 `https://apple:8787`），写 `127.0.0.1` 对方会连到它自己。
+- **`BILLGO_KIND`**：改成 `wakeable` 时，`wake` 信息仍然必须写在配置文件里。
+
+故意没放进环境变量的：`listen`、`data_dir`、`agent_cmd`、`wake`、超时和反熵周期，继续写文件。页面监听是 `BILLUI_LISTEN`，不属于节点配置。
+
+配置生效后可以自查：
+
+```bash
+billgo --data /data node      # name / kind / network / endpoint
+billgo --data /data peers     # 名录是否拉到了
+```
+
+容器示例：
+
+```bash
+docker run -d --name apple --network billgo-manual \
+  -e BILLGO_NAME=apple \
+  -e BILLGO_ENDPOINT=https://apple:8787 \
+  -e BILLGO_BOOTSTRAP='https://banana:8787#3ipmrxqyj5sfzlsa' \
+  -v apple-data:/data \
+  billgo:dev
+```
+
+## 加入集群
+
+第一个节点不需要邻居，`bootstrap` 留空即可：
+
+```json
+{
+  "name": "banana",
+  "kind": "resident",
+  "network": "default",
+  "listen": "0.0.0.0:8787",
+  "endpoint": "https://banana:8787",
+  "data_dir": "/data",
+  "bootstrap": [],
+  "allow_from": []
+}
+```
+
+启动后读它的 peer_id：
+
+```bash
+billgo --data /data node
+billgo --data /data peers    # 只有它自己
+```
+
+第二个节点只配第一个节点：
+
+```json
+"bootstrap": ["https://banana:8787#<第一个节点的 peer_id>"]
+```
+
+第二个节点启动后会拉取名录，并把自己的记录推回第一个节点；所以**第一个节点会自动发现第二个**，不需要在第一个节点里配置 bootstrap。后面每个新节点都只配一个已有节点即可。
+
+如果第一个节点要接第二个节点的派单，还要把第二个节点的 peer_id 加进第一个节点的 `allow_from` 并重启。`bootstrap` 只管发现，不管授权。
+
+两个注意点：
+
+- `endpoint` 必须是别人能连到的地址。容器里写服务名（如 `https://banana:8787`），写 `127.0.0.1` 对方会连到它自己。
+- 两边的 `network` 必须一致，否则记录会被静默丢弃。
+
+用环境变量起第一个节点时不需要 `BILLGO_BOOTSTRAP`：
+
+```bash
+docker run -d --name banana --network billgo-manual \
+  -e BILLGO_NAME=banana \
+  -e BILLGO_ENDPOINT=https://banana:8787 \
+  -v banana-data:/data \
+  billgo:dev
+```
+
+完整的三节点手工流程见 [docs/手工测试.md](docs/手工测试.md)。
 
 ## CLI
 
@@ -155,16 +240,28 @@ docker compose -f deploy/compose.yaml down -v   # 清理
 billgo [--data 数据目录] <命令>
 
 billgo node                                   # 节点信息（peer_id 在这里）
+billgo status                                 # 状态、待处理与配置摘要
+billgo config                                 # 当前生效配置
+billgo config write --file cfg.json           # access 立即生效，其余重启后生效
 billgo peers                                  # 本地名录
 billgo ticket create --form f.json --flow banana,peach
 billgo ticket list
 billgo ticket show <id>                       # 状态 + 事件流
 billgo ticket redispatch <id> --hop 1 --to banana
 billgo ticket void <id>
+billgo audit                                  # 谁访问过本机，可加 --limit / --cursor
 billgo outbox                                 # 卡住的消息与重试次数
 billgo wake peach                             # 手动叫醒
 billgo withdraw                               # 注销本节点（写墓碑，其他人不再能派单给它）
+
+billgo --peer peach node                      # 问邻居。还有 config / peers
+billgo --peer peach ticket list --limit 20    # 分页，没有“全部加载”
+billgo --peer peach ticket show <id>
+billgo --peer peach ticket create --form f.json --flow banana
+billgo --peer peach config write --file cfg.json
 ```
+
+`--peer` 的读默认允许，写要对方显式放行。拒绝、离线、超时会是不同的错误。工单仍只在发起者本地，问不到离线节点的旧数据。
 
 注销规则：常驻节点优雅退出时自动注销；**唤醒类不会**——睡着是它的正常状态，自动注销等于让别人再也叫不醒它。要下线一个唤醒类节点，显式执行 `billgo withdraw`。
 
@@ -189,7 +286,21 @@ billgo withdraw                               # 注销本节点（写墓碑，�
 
 Agent 一侧不需要知道信封、哈希、签名。一个 shell 脚本和一个 LLM Agent 接活方式完全相同。
 
-作业状态落库，守护进程重启后会重新执行未完成的作业。
+作业状态落库，守护进程重启后会重新执行未完成的作业。每个节点同时只跑一个作业。
+
+### 适配脚本
+
+完整示例见 [examples/agent-job.sh](examples/agent-job.sh)。契约只有五条：
+
+| 项 | 约定 |
+|---|---|
+| 输入 | 读 `$BILLGO_JOB_DIR/job.json` |
+| 产物 | 写到 `$BILLGO_OUT_DIR` |
+| 拒绝 | 写 `$BILLGO_JOB_DIR/result.json` 的 `reason`，非零退出 |
+| 成功 | 退出码 0，billgo 负责打包和送达 |
+| 超时 | `job_timeout_min` 到点杀进程，按拒绝处理 |
+
+换 Agent 只改脚本里的调用行（`pi`、`claude`、任意程序），billgo 核心不用动。`agent_cmd` 为空表示这个节点不接活。
 
 ## 唤醒
 

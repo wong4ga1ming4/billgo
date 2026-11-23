@@ -4,17 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"billgo/internal/access"
 	"billgo/internal/config"
+	"billgo/internal/control"
 	"billgo/internal/envelope"
 	"billgo/internal/identity"
 	"billgo/internal/node"
+	"billgo/internal/nodestatus"
 	"billgo/internal/ticket"
 	"billgo/internal/transport"
 )
@@ -58,8 +60,6 @@ func baseCfg(t *testing.T, name string) *config.Config {
 	c.AcceptTimeoutMin = 5
 	c.DeliverTimeoutMin = 5
 	c.JobTimeoutMin = 2
-	// 测试里多个节点同机运行，默认的 127.0.0.1:7878 会冲突。
-	c.UI = &config.UIConfig{Listen: "", Root: c.UI.Root}
 	return c
 }
 
@@ -69,7 +69,12 @@ func bootstrap(n *node.Node) string {
 
 func start(t *testing.T, cfg *config.Config) *running {
 	t.Helper()
-	n, err := node.New(cfg)
+	return startWith(t, cfg, node.Options{})
+}
+
+func startWith(t *testing.T, cfg *config.Config, opt node.Options) *running {
+	t.Helper()
+	n, err := node.NewWithOptions(cfg, opt)
 	if err != nil {
 		t.Fatalf("装配 %s: %v", cfg.Name, err)
 	}
@@ -342,38 +347,38 @@ func TestWakeableNotTombstonedOnStop(t *testing.T) {
 	t.Fatal("apple 名录里应该还留着 banana 的记录")
 }
 
-func TestUIServed(t *testing.T) {
+func TestControlStatusAndConfig(t *testing.T) {
 	cfg := baseCfg(t, "apple")
-	cfg.UI = &config.UIConfig{Listen: "127.0.0.1:0", Root: filepath.Join(cfg.DataDir, "www")}
 	r := start(t, cfg)
+	ctx := context.Background()
 
-	addr := r.n.UIAddr()
-	if addr == "" {
-		t.Fatal("页面没有启动")
-	}
-	resp, err := http.Get("http://" + addr + "/api/node")
-	if err != nil {
+	if _, err := r.n.Tickets().Create(ticket.CreateReq{
+		Form: json.RawMessage(`{"x":1}`),
+		Flow: []ticket.Hop{{Step: 1, To: r.n.PeerID()}},
+	}); err != nil {
 		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("页面接口 %d", resp.StatusCode)
-	}
-	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatal(err)
-	}
-	if out["peer_id"] != r.n.PeerID() {
-		t.Fatalf("peer_id 不对: %+v", out)
 	}
 
-	page, err := http.Get("http://" + addr + "/")
-	if err != nil {
+	c := control.NewClient(cfg.DataDir)
+	var st nodestatus.Status
+	if err := c.Do(ctx, "GET", "/status", nil, &st); err != nil {
 		t.Fatal(err)
 	}
-	defer page.Body.Close()
-	if page.StatusCode != http.StatusOK {
-		t.Fatalf("主页 %d", page.StatusCode)
+	if st.Summary.Tickets[ticket.StatusRunning] < 1 {
+		t.Fatalf("状态里应有一张运行中的工单: %+v", st.Summary)
+	}
+
+	var info struct {
+		Version   string   `json:"version"`
+		DataDir   string   `json:"data_dir"`
+		Bootstrap []string `json:"bootstrap"`
+		AllowFrom []string `json:"allow_from"`
+	}
+	if err := c.Do(ctx, "GET", "/node", nil, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Version == "" || info.DataDir == "" {
+		t.Fatalf("配置字段缺失: %+v", info)
 	}
 }
 
@@ -414,4 +419,200 @@ func TestResumeJobAfterRestart(t *testing.T) {
 		return err == nil && st.Status == ticket.StatusClosed
 	})
 	_ = restarted
+}
+
+func TestRemoteReadDenyAndAudit(t *testing.T) {
+	appleCfg := baseCfg(t, "apple")
+	bananaCfg := baseCfg(t, "banana")
+	bid, err := identity.LoadOrCreate(filepath.Join(bananaCfg.DataDir, "identity.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appleCfg.Access = &access.Policy{
+		Default: access.Allow,
+		Rules: []access.Rule{{
+			Peer: bid.PeerID,
+			Deny: []string{access.TicketsGet, access.ConfigWrite},
+		}},
+	}
+	apple := start(t, appleCfg)
+	bananaCfg.Bootstrap = []string{bootstrap(apple.n)}
+	banana := start(t, bananaCfg)
+	waitFor(t, 10*time.Second, "banana 发现 apple", func() bool { return knows(banana, apple) })
+
+	tid, err := apple.n.Tickets().Create(ticket.CreateReq{
+		Form: form(t),
+		Flow: []ticket.Hop{{Step: 1, To: banana.n.PeerID(), Desc: "一步"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	remote := control.NewClient(banana.cfg.DataDir)
+	var got struct {
+		State ticket.State `json:"state"`
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.TicketsGet, map[string]string{"id": tid}, &got); err == nil || !strings.Contains(err.Error(), "拒绝访问") {
+		t.Fatalf("工单内容应被拒绝，得到 %v", err)
+	}
+
+	var view map[string]any
+	if err := remote.Call(ctx, "apple", access.ConfigRead, nil, &view); err != nil {
+		t.Fatalf("远程读配置: %v", err)
+	}
+	if view["name"] != "apple" {
+		t.Fatalf("配置名不对: %v", view["name"])
+	}
+
+	var listed struct {
+		Items []ticket.State `json:"items"`
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.TicketsList, map[string]any{"limit": 10}, &listed); err != nil {
+		t.Fatalf("工单列表应公开: %v", err)
+	}
+	if len(listed.Items) != 1 || listed.Items[0].ID != tid || len(listed.Items[0].Form) != 0 || listed.Items[0].Hops[0].Desc != "" {
+		t.Fatalf("列表应有工单且不含表单和描述: %+v", listed.Items)
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.ConfigWrite, map[string]any{}, nil); err == nil || !strings.Contains(err.Error(), "拒绝访问") {
+		t.Fatalf("写配置应默认拒绝，得到 %v", err)
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.TicketsCreate, map[string]any{}, nil); err == nil || !strings.Contains(err.Error(), "拒绝访问") {
+		t.Fatalf("发起工单应默认拒绝，得到 %v", err)
+	}
+	if err := remote.Call(ctx, "0123456789abcdef", access.NodeInfo, nil, &view); err == nil || !strings.Contains(err.Error(), "not_found") {
+		t.Fatalf("未知节点应是 not_found，得到 %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(apple.cfg.DataDir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, `"result":"allow"`) || !strings.Contains(text, `"result":"deny"`) {
+		t.Fatalf("审计应同时有允许和拒绝:\n%s", text)
+	}
+	if !strings.Contains(text, bid.PeerID) {
+		t.Fatalf("审计应记下请求方:\n%s", text)
+	}
+
+	local := control.NewClient(apple.cfg.DataDir)
+	var page struct {
+		Items []ticket.State `json:"items"`
+	}
+	if err := local.Call(ctx, "", access.TicketsList, map[string]any{"limit": 1}, &page); err != nil {
+		t.Fatalf("本机分页: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != tid {
+		t.Fatalf("本机分页结果不对: %+v", page.Items)
+	}
+
+	var auditPage struct {
+		Items []struct {
+			Action string `json:"action"`
+			Result string `json:"result"`
+		} `json:"items"`
+		Next string `json:"next_cursor"`
+	}
+	if err := local.Do(ctx, "GET", "/audit?limit=2", nil, &auditPage); err != nil {
+		t.Fatalf("读审计: %v", err)
+	}
+	if len(auditPage.Items) != 2 || auditPage.Next == "" {
+		t.Fatalf("审计应分页: %+v next=%q", auditPage.Items, auditPage.Next)
+	}
+	if auditPage.Items[0].Result != "deny" {
+		t.Fatalf("最新一条应是拒绝: %+v", auditPage.Items[0])
+	}
+}
+
+func TestRemoteWriteIdempotentAndAccessHot(t *testing.T) {
+	appleCfg := baseCfg(t, "apple")
+	bananaCfg := baseCfg(t, "banana")
+	bid, err := identity.LoadOrCreate(filepath.Join(bananaCfg.DataDir, "identity.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appleCfg.Access = &access.Policy{
+		Default: access.Allow,
+		Rules: []access.Rule{{
+			Peer: bid.PeerID,
+			Allow: []string{
+				access.TicketsCreate,
+				access.TicketsVoid,
+				access.ConfigWrite,
+			},
+		}},
+	}
+	cfgPath := filepath.Join(appleCfg.DataDir, "node.json")
+	apple := startWith(t, appleCfg, node.Options{ConfigPath: cfgPath})
+	bananaCfg.Bootstrap = []string{bootstrap(apple.n)}
+	banana := start(t, bananaCfg)
+	waitFor(t, 10*time.Second, "banana 发现 apple", func() bool { return knows(banana, apple) })
+
+	ctx := context.Background()
+	remote := control.NewClient(banana.cfg.DataDir)
+	body := map[string]any{
+		"peer":   apple.n.PeerID(),
+		"action": access.TicketsCreate,
+		"id":     "idem-1",
+		"args": ticket.CreateReq{
+			Form: form(t),
+			Flow: []ticket.Hop{{Step: 1, To: banana.n.PeerID(), Desc: "一步"}},
+		},
+	}
+	var first, second struct {
+		ID string `json:"id"`
+	}
+	if err := remote.Do(ctx, "POST", "/ctl", body, &first); err != nil {
+		t.Fatalf("第一次发起: %v", err)
+	}
+	if err := remote.Do(ctx, "POST", "/ctl", body, &second); err != nil {
+		t.Fatalf("重复发起: %v", err)
+	}
+	if first.ID == "" || first.ID != second.ID {
+		t.Fatalf("同一请求应得到同一工单，得到 %q 和 %q", first.ID, second.ID)
+	}
+	if n := len(apple.n.Tickets().List()); n != 1 {
+		t.Fatalf("重复请求应只留下 1 张工单，得到 %d", n)
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.TicketsVoid, map[string]string{"id": first.ID}, nil); err != nil {
+		t.Fatalf("作废: %v", err)
+	}
+	st, _, err := apple.n.Tickets().Get(first.ID)
+	if err != nil || st.Status != ticket.StatusVoided {
+		t.Fatalf("工单应已作废: %+v %v", st, err)
+	}
+
+	written := *apple.cfg
+	written.Name = "renamed"
+	written.Access = &access.Policy{Default: access.Deny}
+	raw, err := json.Marshal(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ack struct {
+		OK bool `json:"ok"`
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.ConfigWrite, json.RawMessage(raw), &ack); err != nil {
+		t.Fatalf("写配置: %v", err)
+	}
+	if !ack.OK {
+		t.Fatal("写配置没有确认")
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.TicketsGet, map[string]string{"id": first.ID}, nil); err == nil || !strings.Contains(err.Error(), "拒绝访问") {
+		t.Fatalf("access 应立即关掉内容，得到 %v", err)
+	}
+	if err := remote.Call(ctx, apple.n.PeerID(), access.TicketsList, map[string]any{"limit": 10}, &struct{}{}); err != nil {
+		t.Fatalf("工单列表应保持公开: %v", err)
+	}
+	if apple.n.Config().Name != "apple" {
+		t.Fatalf("名字应留到重启，当前是 %q", apple.n.Config().Name)
+	}
+	saved, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), `"name": "renamed"`) {
+		t.Fatalf("文件里应是新名字:\n%s", saved)
+	}
 }

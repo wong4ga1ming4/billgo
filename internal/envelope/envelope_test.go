@@ -155,6 +155,36 @@ func TestIdempotencyKeyPeersRecord(t *testing.T) {
 	}
 }
 
+func TestStaleCtlRejected(t *testing.T) {
+	apple, peach := seed(1), seed(2)
+	old := time.Now().Add(-10 * time.Minute).UnixMilli()
+	e, err := New(TypeCtlRequest, peach.PeerID, "", 0, old, map[string]any{"id": "r1", "action": "node.info"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Sign(apple.Private); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CheckFresh(time.Now(), 5*time.Minute); !errors.Is(err, ErrStale) {
+		t.Fatalf("过期控制请求应被拒绝，得到 %v", err)
+	}
+}
+
+func TestCtlIdempotencyKey(t *testing.T) {
+	apple, peach := seed(1), seed(2)
+	e, err := New(TypeCtlRequest, peach.PeerID, "", 0, time.Now().UnixMilli(), map[string]any{"id": "r1", "action": "node.info"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Sign(apple.Private); err != nil {
+		t.Fatal(err)
+	}
+	key, ok, err := e.IdempotencyKey()
+	if err != nil || !ok || key != "ctl|r1" {
+		t.Fatalf("控制请求幂等键不对: %q ok=%v err=%v", key, ok, err)
+	}
+}
+
 func TestDigestNotDeduped(t *testing.T) {
 	e, err := New(TypePeersDigest, "", "", 0, time.Now().UnixMilli(), map[string]any{})
 	if err != nil {

@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
+	"billgo/internal/audit"
+	"billgo/internal/nodestatus"
 	"billgo/internal/ticket"
 	"billgo/internal/wake"
 )
@@ -15,14 +18,11 @@ import (
 func (n *Node) controlMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /node", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"peer_id":  n.id.PeerID,
-			"name":     n.cfg.Name,
-			"kind":     n.cfg.Kind,
-			"endpoint": n.cfg.Endpoint,
-			"network":  n.cfg.Network,
-			"version":  n.version,
-		})
+		writeJSON(w, http.StatusOK, n.nodeInfo())
+	})
+	mux.HandleFunc("POST /ctl", n.handleCtlHTTP)
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, nodestatus.Compute(n.tickets, n.peers, n.out, time.Now()))
 	})
 	mux.HandleFunc("GET /peers", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, n.peers.ListAll())
@@ -94,6 +94,18 @@ func (n *Node) controlMux() http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("GET /audit", func(w http.ResponseWriter, r *http.Request) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		items, next, err := n.audit.List(limit, r.URL.Query().Get("cursor"))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		if items == nil {
+			items = []audit.Record{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 	})
 	mux.HandleFunc("GET /outbox", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, n.out.List())

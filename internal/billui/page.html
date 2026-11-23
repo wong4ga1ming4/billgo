@@ -1,0 +1,179 @@
+{{define "head"}}<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; margin: 0; }
+    header, main { max-width: 960px; margin: 0 auto; padding: 16px; }
+    header { display: flex; justify-content: space-between; align-items: center; }
+    h1 { font-size: 20px; margin: 0; }
+    h1 a { color: inherit; text-decoration: none; }
+    h2 { font-size: 16px; margin: 24px 0 8px; }
+    a { color: inherit; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #8884; vertical-align: top; }
+    .muted { opacity: .7; }
+    .error { padding: 12px; border: 1px solid #c44; }
+    .warn { padding: 12px; border: 1px solid #c80; }
+    form.login { display: grid; gap: 8px; max-width: 320px; }
+    input, button, textarea { font: inherit; padding: 6px 8px; }
+    textarea { width: 100%; box-sizing: border-box; }
+    form.stack { display: grid; gap: 8px; max-width: 480px; margin-top: 8px; }
+    dl { display: grid; grid-template-columns: 8em 1fr; gap: 4px 12px; margin: 0; }
+    dt { opacity: .7; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .card { border: 1px solid #8884; padding: 8px 12px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1><a href="/">billui</a></h1>
+  {{if .Authed}}<div class="row"><a href="/audit">审计</a><form method="post" action="/logout"><button type="submit">退出</button></form></div>{{end}}
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "login"}}{{template "head" .}}
+<h2>登录</h2>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form class="login" method="post" action="/login">
+  <label>密码 <input type="password" name="password" autofocus required></label>
+  <button type="submit">进入</button>
+</form>
+<p class="muted">密码只在这次启动里有效，写在数据目录的 billui.password，也打在日志里。忘记密码就重启 billui，旧会话会一起失效。</p>
+{{template "foot" .}}{{end}}
+
+{{define "problem"}}{{template "head" .}}
+<p class="error">{{.Message}}</p>
+{{if .Hint}}<p>{{.Hint}}</p>{{end}}
+{{if .Retry}}<p><a href="{{.Retry}}">再试一次</a></p>{{end}}
+{{if .Hint}}<p class="muted">点「再试一次」才会再问。不会自动重试，也不会留下上次看到的内容。</p>{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "home"}}{{template "head" .}}
+<p>{{.Node.Name}}#{{.Node.Short}} · {{.Node.Kind}} · {{.Node.Network}} · {{.Node.Version}}</p>
+{{if .AccessOpen}}<p class="warn">{{.AccessNote}}</p>{{else if .AccessNote}}<p class="muted">{{.AccessNote}}</p>{{end}}
+<p class="muted">这次登录只在当前 billui 进程里有效。忘记密码就重启它。</p>
+<h2>状态</h2>
+<div class="row">
+  <div class="card">工单 运行 {{index .Status.Summary.Tickets "running"}} · 完成 {{index .Status.Summary.Tickets "closed"}} · 作废 {{index .Status.Summary.Tickets "voided"}}</div>
+  <div class="card">队列 {{index .Status.Summary.Outbox "pending"}} 条，卡住 {{index .Status.Summary.Outbox "stuck"}}</div>
+</div>
+<h2>待处理</h2>
+{{if .Status.Attention}}
+<ul>
+  {{range .Status.Attention}}<li>{{.Kind}} {{.Ticket}} {{if .Hop}}第{{.Hop}}跳{{end}} {{.Peer}} {{.Reason}}<br><span class="muted">{{.Hint}}</span></li>{{end}}
+</ul>
+{{else}}<p class="muted">没有待处理</p>{{end}}
+<h2>配置</h2>
+<dl>
+  <dt>peer_id</dt><dd>{{.Node.PeerID}}</dd>
+  <dt>endpoint</dt><dd>{{.Node.Endpoint}}</dd>
+  <dt>listen</dt><dd>{{.Node.Listen}}</dd>
+  <dt>bootstrap</dt><dd>{{len .Node.Bootstrap}}</dd>
+  <dt>allow_from</dt><dd>{{len .Node.AllowFrom}}</dd>
+  <dt>wake</dt><dd>{{if .Node.WakeMode}}{{.Node.WakeMode}}{{else}}—{{end}}</dd>
+</dl>
+<h2>名录</h2>
+<table>
+  <thead><tr><th>节点</th><th>类型</th><th>地址</th><th>描述</th></tr></thead>
+  <tbody>
+  {{range .Peers}}<tr>
+    <td>{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}{{.Label}}{{end}}{{if .Deleted}} 已注销{{end}}</td>
+    <td>{{.Kind}}</td><td>{{.Endpoint}}</td><td>{{.Desc}}</td>
+  </tr>{{end}}
+  </tbody>
+</table>
+<h2>工单</h2>
+{{template "tickets" .}}
+{{template "create" .}}
+<p class="muted">改配置用 billgo config write。access 立即生效，其余重启后生效。</p>
+{{template "foot" .}}{{end}}
+
+{{define "peer"}}{{template "head" .}}
+<p>邻居 {{.Label}}</p>
+<h2>配置</h2>
+{{if .ConfigNote}}<p class="error">{{.ConfigNote}}</p>{{else}}
+<dl>
+  {{range .Config}}<dt>{{.Key}}</dt><dd>{{.Value}}</dd>{{end}}
+</dl>
+{{end}}
+<h2>工单</h2>
+{{if .ListNote}}<p class="error">{{.ListNote}}</p>{{else}}{{template "tickets" .}}{{end}}
+{{template "create" .}}
+{{template "foot" .}}{{end}}
+
+{{define "tickets"}}
+{{if .Tickets}}
+<table>
+  <thead><tr><th>工单</th><th>状态</th><th>当前跳</th><th>更新</th></tr></thead>
+  <tbody>
+  {{range .Tickets}}<tr>
+    <td><a href="{{.Href}}">{{.ID}}</a></td>
+    <td>{{.Status}}</td><td>{{.Current}}</td><td>{{.Updated}}</td>
+  </tr>{{end}}
+  </tbody>
+</table>
+{{else}}<p class="muted">没有工单</p>{{end}}
+{{if .NextHref}}<p><a href="{{.NextHref}}">下一页</a></p>{{end}}
+{{end}}
+
+{{define "create"}}
+<h2>发起工单</h2>
+<form class="stack" method="post" action="{{.CreateAction}}">
+  <label>表单 JSON<br><textarea name="form" rows="3" required>{"task":""}</textarea></label>
+  <label>流转，逗号分隔 <input name="flow" required></label>
+  <button type="submit">发起</button>
+</form>
+{{end}}
+
+{{define "audit"}}{{template "head" .}}
+<p>本机审计。只记录别人问过这里的请求，不包括你自己在这台机器上的操作。</p>
+{{if .Rows}}
+<table>
+  <thead><tr><th>时间</th><th>结果</th><th>动作</th><th>来源</th></tr></thead>
+  <tbody>
+  {{range .Rows}}<tr>
+    <td>{{.When}}</td><td>{{.Result}}</td><td>{{.Action}}</td><td>{{.From}}</td>
+  </tr>{{end}}
+  </tbody>
+</table>
+{{else}}<p class="muted">没有记录</p>{{end}}
+{{if .NextHref}}<p><a href="{{.NextHref}}">下一页</a></p>{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "ticket"}}{{template "head" .}}
+<p><a href="{{.Back}}">返回</a></p>
+<h2>{{.State.ID}}</h2>
+<p>{{.State.Status}} · {{.Updated}}</p>
+<h2>表单</h2>
+<pre>{{printf "%s" .State.Form}}</pre>
+<h2>流转</h2>
+<ul>
+  {{range .State.Hops}}<li>第{{.Step}}跳 → {{.Target}} {{.Desc}} · {{.State}}</li>{{end}}
+</ul>
+<h2>事件</h2>
+<ul>
+  {{range .Events}}<li>{{.Type}}{{if .Hop}} 第{{.Hop}}跳{{end}} {{.Peer}}</li>{{end}}
+</ul>
+{{if .Running}}
+<h2>作废</h2>
+<form method="post" action="{{.VoidAction}}"><button type="submit">作废</button></form>
+<h2>改派</h2>
+<form class="stack" method="post" action="{{.RedispatchAction}}">
+  <label>第几跳 <input name="hop" type="number" min="1" required></label>
+  <label>改派到 <input name="to" required></label>
+  <button type="submit">改派</button>
+</form>
+{{end}}
+{{template "foot" .}}{{end}}

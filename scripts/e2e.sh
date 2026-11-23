@@ -60,7 +60,6 @@ write_cfg() {
   "allow_from": $allow,
   "bootstrap": $boot,
   "agent_cmd": $agent,
-  "ui": {"listen": ""},
   "anti_entropy_sec": 1,
   "accept_timeout_min": 5,
   "deliver_timeout_min": 5,

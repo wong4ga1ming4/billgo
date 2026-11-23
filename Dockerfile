@@ -4,7 +4,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/billgod ./cmd/billgod && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/billgo ./cmd/billgo
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/billgo ./cmd/billgo && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/billui ./cmd/billui
 
 FROM alpine:3.20
 # ssh 客户端用于 ssh 方式唤醒；docker CLI 用于 local 方式唤醒。
@@ -12,9 +13,10 @@ FROM alpine:3.20
 ARG WITH_DOCKER_CLI=1
 RUN apk add --no-cache openssh-client && \
     if [ "$WITH_DOCKER_CLI" = "1" ]; then apk add --no-cache docker-cli; fi
-COPY --from=build /out/billgod /out/billgo /usr/local/bin/
+COPY --from=build /out/billgod /out/billgo /out/billui /usr/local/bin/
 COPY scripts/wake.sh /opt/billgo/wake.sh
-RUN chmod +x /opt/billgo/wake.sh
+COPY deploy/entrypoint.sh /usr/local/bin/billgo-entrypoint
+RUN chmod +x /opt/billgo/wake.sh /usr/local/bin/billgo-entrypoint
 VOLUME /data
-ENTRYPOINT ["billgod"]
+ENTRYPOINT ["billgo-entrypoint"]
 CMD ["-config", "/etc/billgo/config.json"]

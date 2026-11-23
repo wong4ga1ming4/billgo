@@ -1,10 +1,13 @@
-package webui
+// Package nodestatus 从本地工单、名录和 outbox 派生节点状态，
+// 供本机页面和控制面共用。
+package nodestatus
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
+	"billgo/internal/outbox"
+	"billgo/internal/peers"
 	"billgo/internal/ticket"
 )
 
@@ -13,13 +16,15 @@ const (
 	outboxStuckAge      = 10 * time.Minute
 )
 
-type statusSummary struct {
+// Summary 数量汇总。
+type Summary struct {
 	Tickets map[string]int `json:"tickets"`
 	Hops    map[string]int `json:"hops"`
 	Outbox  map[string]int `json:"outbox"`
 }
 
-type attentionItem struct {
+// AttentionItem 需要发起方处理的一件事。
+type AttentionItem struct {
 	Kind       string `json:"kind"`
 	Ticket     string `json:"ticket,omitempty"`
 	Hop        int    `json:"hop,omitempty"`
@@ -30,14 +35,30 @@ type attentionItem struct {
 	Hint       string `json:"hint"`
 }
 
-type statusResponse struct {
-	Summary   statusSummary   `json:"summary"`
-	Attention []attentionItem `json:"attention"`
+// Status 一个节点的状态快照。
+type Status struct {
+	Summary   Summary         `json:"summary"`
+	Attention []AttentionItem `json:"attention"`
 }
 
-func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
-	now := s.now()
-	sum := statusSummary{
+// Tickets 工单只读能力。
+type Tickets interface {
+	List() []ticket.State
+}
+
+// Directory 名录只读能力。
+type Directory interface {
+	Lookup(peerID string) (peers.Record, bool)
+}
+
+// Outbox 待发队列只读能力。
+type Outbox interface {
+	List() []outbox.Item
+}
+
+// Compute 从本地数据派生状态。now 由调用方传入，便于测试。
+func Compute(tickets Tickets, dir Directory, out Outbox, now time.Time) Status {
+	sum := Summary{
 		Tickets: map[string]int{ticket.StatusRunning: 0, ticket.StatusClosed: 0, ticket.StatusVoided: 0},
 		Hops: map[string]int{
 			ticket.HopPending: 0, ticket.HopSent: 0, ticket.HopAccepted: 0,
@@ -46,9 +67,9 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 		},
 		Outbox: map[string]int{"pending": 0, "stuck": 0},
 	}
-	att := []attentionItem{}
+	att := []AttentionItem{}
 
-	for _, st := range s.tk.List() {
+	for _, st := range tickets.List() {
 		sum.Tickets[st.Status]++
 		for _, h := range st.Hops {
 			sum.Hops[h.State]++
@@ -66,7 +87,7 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 			if cur.State == ticket.HopExpired {
 				reason = fmt.Sprintf("第 %d 跳超时", cur.Step)
 			}
-			att = append(att, attentionItem{
+			att = append(att, AttentionItem{
 				Kind:       "hop_" + cur.State,
 				Ticket:     st.ID,
 				Hop:        cur.Step,
@@ -78,8 +99,8 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 					st.ID, cur.Step, cur.Target),
 			})
 		case ticket.HopPending, ticket.HopSent, ticket.HopAccepted:
-			if _, ok := s.dir.Lookup(cur.Target); !ok {
-				att = append(att, attentionItem{
+			if _, ok := dir.Lookup(cur.Target); !ok {
+				att = append(att, AttentionItem{
 					Kind:       "no_peer",
 					Ticket:     st.ID,
 					Hop:        cur.Step,
@@ -94,7 +115,7 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	items := s.out.List()
+	items := out.List()
 	sum.Outbox["pending"] = len(items)
 	for _, it := range items {
 		old := it.CreatedAt > 0 && now.Sub(time.UnixMilli(it.CreatedAt)) > outboxStuckAge
@@ -106,7 +127,7 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 		if reason == "" {
 			reason = "多次重试仍未送达"
 		}
-		att = append(att, attentionItem{
+		att = append(att, AttentionItem{
 			Kind:       "outbox_stuck",
 			Peer:       it.PeerID,
 			Reason:     reason,
@@ -116,7 +137,7 @@ func (s *Server) apiStatus(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, statusResponse{Summary: sum, Attention: att})
+	return Status{Summary: sum, Attention: att}
 }
 
 func ageSec(now time.Time, ms int64) int64 {
